@@ -1,10 +1,11 @@
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
@@ -19,6 +20,13 @@ SOL_PRICE_URL = "https://lite-api.jup.ag/price/v3?ids=So111111111111111111111111
 
 # Only the correct timeframes from Jupiter Ultra API
 ULTRA_TIMEFRAMES = ["stats5m", "stats1h", "stats6h", "stats24h"]
+
+# Signal parameters (as requested)
+ENTRY_VOL_LIQ_5M_MIN = 0.3
+EXIT_RATIO_DROP_MULTIPLIER = 0.90  # exit when Ratio min30 < entry_ratio * 0.90
+COOLDOWN_MULTIPLIER = 0.5  # momentum cooling when vol/liq 5m < 0.5 * vol/liq 1h
+
+EPS = 1e-12
 
 
 # ----------------------------
@@ -100,6 +108,10 @@ def fetch_sol_price() -> float:
 # ----------------------------
 # Time / parsing helpers
 # ----------------------------
+def now_utc_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
 def format_created_at(created_at_str: str) -> str:
     try:
         created_time = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
@@ -137,6 +149,10 @@ def parse_created_to_hours(created_str: str) -> int:
 # ----------------------------
 # Pair processing helpers
 # ----------------------------
+def clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, x))
+
+
 def get_true_averages(p: dict, key: str) -> float:
     timeframes = [1, 2, 4, 12, 24]
     values = [float(p.get(key, {}).get(f"hour_{tf}", 0)) for tf in timeframes]
@@ -154,6 +170,38 @@ def get_true_averages(p: dict, key: str) -> float:
         return sum(filtered) / len(filtered)
 
     return 0.0
+
+
+def compute_entry_score(vol_liq_5m: float, vol_liq_1h: float, ratio_min30: float) -> float:
+    # Heat: 0 at 0.3, 1 at 1.0 (cap)
+    heat = clamp((vol_liq_5m - 0.3) / 0.7, 0.0, 1.0)
+
+    # Acceleration: 0 at parity, 1 at 2x (cap)
+    accel_ratio = vol_liq_5m / (vol_liq_1h + EPS)
+    accel = clamp((accel_ratio - 1.0) / 1.0, 0.0, 1.0)
+
+    # Fee boost: 0 at ratio=2, 1 at ratio=10 (cap)
+    fee = clamp((ratio_min30 - 2.0) / 8.0, 0.0, 1.0)
+
+    score = 100.0 * (0.50 * heat + 0.35 * accel + 0.15 * fee)
+    return float(score)
+
+
+def compute_exit_score(
+    vol_liq_5m: float,
+    vol_liq_1h: float,
+    ratio_min30: float,
+    entry_ratio_min30: float,
+) -> float:
+    # Fee drop severity: 0 when above entry, 1 when ratio -> 0
+    fee_drop = clamp((entry_ratio_min30 - ratio_min30) / (entry_ratio_min30 + EPS), 0.0, 1.0)
+
+    # Cooldown severity: 0 when v5 >= 0.5*v1, 1 when v5 -> 0 (relative to 0.5*v1)
+    target = COOLDOWN_MULTIPLIER * vol_liq_1h
+    cool = clamp((target - vol_liq_5m) / (target + EPS), 0.0, 1.0)
+
+    score = 100.0 * (0.65 * fee_drop + 0.35 * cool)
+    return float(score)
 
 
 def process_pairs(
@@ -230,7 +278,7 @@ def process_pairs(
             buy_vol = float(tf_stats.get("buyVolume", 0))
             sell_vol = float(tf_stats.get("sellVolume", 0))
             total_vol = buy_vol + sell_vol
-            vol_liq = (total_vol / ultra_liquidity) if ultra_liquidity > 0 else 0
+            vol_liq = (total_vol / ultra_liquidity) if ultra_liquidity > 0 else 0.0
             tf_name = tf.replace("stats", "vol/liq ")
             vol_liq_dict[tf_name] = vol_liq
 
@@ -306,6 +354,73 @@ def safe_session_number(key: str, min_val: float, max_val: float, default: float
 
 
 # ----------------------------
+# Position tracking + signals
+# ----------------------------
+def init_positions_state() -> None:
+    # positions: { address: {"entry_ratio_min30": float, "entered_at": iso_str} }
+    if "positions" not in st.session_state or not isinstance(st.session_state.positions, dict):
+        st.session_state.positions = {}
+
+
+def parse_positions_text(text: str) -> List[str]:
+    lines = [ln.strip() for ln in (text or "").splitlines()]
+    return [ln for ln in lines if ln]
+
+
+def compute_signals(
+    pairs: List[dict],
+    positions: Dict[str, Dict[str, Any]],
+) -> List[dict]:
+    """
+    Adds:
+      - Entry Score
+      - Exit Score
+      - Signal (ENTER/HOLD/IN POSITION/EXIT)
+      - Entry Ratio (for positions)
+      - Entered At (for positions)
+    """
+    enriched: List[dict] = []
+
+    for p in pairs:
+        address = p.get("Address", "")
+        v5 = float(p.get("vol/liq 5m", 0) or 0)
+        v1 = float(p.get("vol/liq 1h", 0) or 0)
+        r30 = float(p.get("Ratio min30", 0) or 0)
+
+        entry_score = compute_entry_score(v5, v1, r30)
+
+        in_pos = address in positions
+        entry_ratio = float(positions.get(address, {}).get("entry_ratio_min30", 0) or 0)
+        entered_at = positions.get(address, {}).get("entered_at", "")
+
+        # Exit logic (buffered 10% drop) and/or cooldown
+        ratio_exit = (entry_ratio > 0) and (r30 < entry_ratio * EXIT_RATIO_DROP_MULTIPLIER)
+        cooldown_exit = v5 < (COOLDOWN_MULTIPLIER * v1)
+
+        exit_score = 0.0
+        if in_pos and entry_ratio > 0:
+            exit_score = compute_exit_score(v5, v1, r30, entry_ratio)
+
+        # Entry logic
+        entry_ok = (v5 > ENTRY_VOL_LIQ_5M_MIN) and (v5 > v1)
+
+        if not in_pos:
+            signal = "ENTER" if entry_ok else "HOLD"
+        else:
+            signal = "EXIT" if (ratio_exit or cooldown_exit) else "IN POSITION"
+
+        p2 = dict(p)
+        p2["Entry Score"] = entry_score
+        p2["Exit Score"] = exit_score
+        p2["Signal"] = signal
+        p2["Entry Ratio"] = entry_ratio
+        p2["Entered At"] = entered_at
+        enriched.append(p2)
+
+    return enriched
+
+
+# ----------------------------
 # Table formatting + rendering
 # ----------------------------
 def format_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -328,6 +443,9 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Cum Trade Vol": lambda x: f"{x:,.2f}",
         "Cum Fee Vol": lambda x: f"{x:,.2f}",
         "Custom Sort": lambda x: f"{x:,.0f}" if x is not None else "",
+        "Entry Score": lambda x: f"{x:.1f}",
+        "Exit Score": lambda x: f"{x:.1f}",
+        "Entry Ratio": lambda x: f"{x:.2f}" if isinstance(x, (float, int)) else "",
     }
 
     # Format all vol/liq columns
@@ -352,6 +470,11 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     df = format_columns(df)
 
     columns = [
+        "Signal",
+        "Entry Score",
+        "Exit Score",
+        "Entry Ratio",
+        "Entered At",
         "Links",
         "Name",
         "Liquidity ($)",
@@ -401,7 +524,7 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     df = df[[col for col in columns if col in df.columns]]
 
     try:
-        sort_vals = df[sort_field].str.replace(",", "").str.replace("%", "").astype(float)
+        sort_vals = df[sort_field].astype(str).str.replace(",", "").str.replace("%", "").astype(float)
         df = (
             df.assign(_sort_col=sort_vals)
             .sort_values("_sort_col", ascending=not reverse)
@@ -444,26 +567,24 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             overflow-wrap: anywhere !important;
             word-break: break-all !important;
         }
-        .high-ratio-row {
-            background-color: #7d3c98 !important;
-            color: #fff !important;
-        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
     def row_style(row: pd.Series) -> List[str]:
-        try:
-            if float(row["Ratio min30"]) > 10:
-                return ["background-color: #7d3c98; color: #fff;"] * len(row)
-        except Exception:
-            pass
+        sig = str(row.get("Signal", ""))
+        if sig == "ENTER":
+            return ["background-color: #0b3d0b; color: #fff;"] * len(row)  # green
+        if sig == "IN POSITION":
+            return ["background-color: #6b5b00; color: #fff;"] * len(row)  # yellow-ish
+        if sig == "EXIT":
+            return ["background-color: #5a0b0b; color: #fff;"] * len(row)  # red
         return [""] * len(row)
 
     styled_df = df.style.apply(row_style, axis=1)
 
-    st.write("### Meteora Pools Table")
+    st.write("### Meteora Pools Table (Signals)")
     st.markdown(styled_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
     st.download_button(
@@ -479,8 +600,14 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
 # ----------------------------
 def main() -> None:
     st.title("Meteora Pool Scoring Dashboard")
-    st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting and filters.")
-    st.info("Fetching and processing data. This may take up to 20 seconds on first load...")
+    st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting, filters, and signals.")
+
+    # Auto-refresh every 30 seconds
+    st_autorefresh(interval=30_000, key="auto_refresh_30s")
+
+    init_positions_state()
+
+    st.caption(f"Last updated (UTC): {now_utc_iso()} | Auto-refresh: 30s")
 
     data = fetch_data(API_URL)
     sol_price = fetch_sol_price()
@@ -498,6 +625,7 @@ def main() -> None:
         st.warning("No pairs passed the filtering (organicScore ≥ 74.9).")
         return
 
+    # Filters (existing behavior)
     created_hours = [parse_created_to_hours(p["Created"]) for p in pairs]
     mcap_values = [p["MCAP"] for p in pairs]
     vol_30mins_list = [p["Vol min30"] for p in pairs]
@@ -523,6 +651,44 @@ def main() -> None:
 
     apply_filters = False
     with st.sidebar:
+        with st.expander("🔁 Refresh", expanded=True):
+            st.write("Auto-refresh is enabled (30s).")
+            manual_refresh = st.button("Refresh now")
+            if manual_refresh:
+                st.rerun()
+
+        with st.expander("🧾 Position Tracking", expanded=True):
+            st.write("Paste pool **Address** values (one per line).")
+            positions_text = st.text_area(
+                "My positions (pool addresses):",
+                value="\n".join(st.session_state.positions.keys()),
+                height=140,
+            )
+            col_a, col_b = st.columns(2)
+            with col_a:
+                sync_positions = st.button("Sync list")
+            with col_b:
+                clear_positions = st.button("Clear all")
+
+            if clear_positions:
+                st.session_state.positions = {}
+                st.rerun()
+
+            if sync_positions:
+                # Keep existing entry metadata when possible.
+                new_addrs = set(parse_positions_text(positions_text))
+                old = st.session_state.positions
+
+                updated: Dict[str, Dict[str, Any]] = {}
+                for addr in new_addrs:
+                    if addr in old:
+                        updated[addr] = old[addr]
+                    else:
+                        updated[addr] = {"entry_ratio_min30": 0.0, "entered_at": ""}
+
+                st.session_state.positions = updated
+                st.rerun()
+
         with st.expander("🔍 Filter Pools", expanded=True):
             st.markdown("**Minimum Pool Age (hours)**")
             st.caption(f"[{min_age} – {max_age}]")
@@ -602,8 +768,38 @@ def main() -> None:
         )
         return
 
-    # Only correct vol/liq sort options
+    # Compute signals for the filtered list
+    signaled_pairs = compute_signals(filtered_pairs, st.session_state.positions)
+
+    # "Enter/Exit" controls based on table addresses
+    st.markdown("#### Quick Position Actions")
+    addresses_in_table = sorted({p.get("Address", "") for p in signaled_pairs if p.get("Address")})
+    default_pick = addresses_in_table[0] if addresses_in_table else ""
+    pick = st.selectbox("Select pool Address:", options=addresses_in_table, index=0 if addresses_in_table else None)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Mark as ENTERED (store entry ratio)"):
+            # Find selected pool row and store entry_ratio_min30
+            row = next((p for p in signaled_pairs if p.get("Address") == pick), None)
+            if row:
+                st.session_state.positions[pick] = {
+                    "entry_ratio_min30": float(row.get("Ratio min30", 0) or 0),
+                    "entered_at": now_utc_iso(),
+                }
+                st.rerun()
+
+    with col2:
+        if st.button("Remove position"):
+            if pick in st.session_state.positions:
+                st.session_state.positions.pop(pick, None)
+                st.rerun()
+
+    # Sort options (extended with signals/scores)
     sort_options = [
+        "Entry Score",
+        "Exit Score",
+        "Signal",
         "Vol min30",
         "Fee min30",
         "Ratio min30",
@@ -638,16 +834,28 @@ def main() -> None:
     ]
 
     st.markdown("#### Sort By")
-    sort_field = st.radio(
-        "Choose sort field:",
-        sort_options,
-        index=0,
-        horizontal=True,
-    )
+    sort_field = st.radio("Choose sort field:", sort_options, index=0, horizontal=True)
     order = st.radio("Sort order:", options=["Descending", "Ascending"], index=0, horizontal=True)
     reverse = True if order == "Descending" else False
 
-    display_table(filtered_pairs, sort_field, reverse)
+    display_table(signaled_pairs, sort_field, reverse)
+
+    # Optional: small ranked views
+    st.markdown("### Top Entry Candidates (by Entry Score)")
+    entries = [p for p in signaled_pairs if p.get("Signal") == "ENTER"]
+    if entries:
+        top_entries = sorted(entries, key=lambda x: float(x.get("Entry Score", 0) or 0), reverse=True)[:10]
+        display_table(top_entries, "Entry Score", True)
+    else:
+        st.write("No ENTER candidates right now.")
+
+    st.markdown("### My Positions - Exit Watch (by Exit Score)")
+    inpos = [p for p in signaled_pairs if p.get("Signal") in ("IN POSITION", "EXIT")]
+    if inpos:
+        top_exits = sorted(inpos, key=lambda x: float(x.get("Exit Score", 0) or 0), reverse=True)[:10]
+        display_table(top_exits, "Exit Score", True)
+    else:
+        st.write("No tracked positions in the current filtered set.")
 
 
 if __name__ == "__main__":
