@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -17,29 +18,46 @@ JUPITER_SEARCH_URL = "https://lite-api.jup.ag/tokens/v2/search?query="
 JUPITER_ULTRA_URL = "https://lite-api.jup.ag/ultra/v1/search?query="
 SOL_PRICE_URL = "https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112"
 
-# Only the correct timeframes from Jupiter Ultra API
 ULTRA_TIMEFRAMES = ["stats5m", "stats1h", "stats6h", "stats24h"]
 
-# Signal parameters (as requested)
 ENTRY_VOL_LIQ_5M_MIN = 0.3
-EXIT_RATIO_DROP_MULTIPLIER = 0.90  # exit when Ratio min30 < entry_ratio * 0.90
-COOLDOWN_MULTIPLIER = 0.5  # momentum cooling when vol/liq 5m < 0.5 * vol/liq 1h
+EXIT_RATIO_DROP_MULTIPLIER = 0.90
+COOLDOWN_MULTIPLIER = 0.5
 
 EPS = 1e-12
 
 
 # ----------------------------
-# Auto-refresh (no extra deps)
+# Auto-refresh (session-safe)
 # ----------------------------
-def enable_auto_refresh(seconds: int = 30) -> None:
+def ensure_autorefresh_state(interval_sec: int) -> None:
+    if "autorefresh_interval_sec" not in st.session_state:
+        st.session_state.autorefresh_interval_sec = interval_sec
+    if "next_refresh_ts" not in st.session_state:
+        st.session_state.next_refresh_ts = time.time() + interval_sec
+
+
+def autorefresh_tick() -> None:
     """
-    Browser-level refresh every N seconds.
-    Works on Streamlit Cloud without any external dependencies.
+    Session-preserving auto-refresh.
+    Sleeps in small increments until it's time to rerun, then calls st.rerun().
     """
-    st.markdown(
-        f"<meta http-equiv='refresh' content='{int(seconds)}'>",
-        unsafe_allow_html=True,
-    )
+    interval_sec = int(st.session_state.autorefresh_interval_sec)
+    next_ts = float(st.session_state.next_refresh_ts)
+
+    remaining = next_ts - time.time()
+    if remaining <= 0:
+        st.session_state.next_refresh_ts = time.time() + interval_sec
+        st.rerun()
+
+    # Show countdown and wait a bit. This keeps session_state intact.
+    # (We use a small sleep so the page doesn't freeze for 30s without updates.)
+    placeholder = st.empty()
+    placeholder.caption(f"Auto-refresh in ~{int(remaining)}s (session-safe).")
+
+    time.sleep(min(1.0, max(0.0, remaining)))
+    # After sleeping 1s (or less), rerun to update countdown and check again.
+    st.rerun()
 
 
 # ----------------------------
@@ -59,7 +77,6 @@ def fetch_data(api_url: str) -> Optional[dict]:
 def fetch_jupiter_data(mint_addresses: List[str]) -> Dict[str, Dict[str, Any]]:
     if not mint_addresses:
         return {}
-
     query = ",".join(mint_addresses)
     try:
         response = requests.get(f"{JUPITER_SEARCH_URL}{query}", timeout=15)
@@ -86,19 +103,16 @@ def fetch_ultra_stats(mint_addresses: List[str]) -> Dict[str, dict]:
     stats: Dict[str, dict] = {}
     if not mint_addresses:
         return stats
-
     query = ",".join(mint_addresses[:100])
     try:
         response = requests.get(f"{JUPITER_ULTRA_URL}{query}", timeout=20)
         response.raise_for_status()
         data = response.json()
-
         for item in data:
             mint = item.get("id")
             pool_stats = {tf: item.get(tf, {}) for tf in ULTRA_TIMEFRAMES}
             pool_stats["ultra_liquidity"] = item.get("liquidity", 0)
             stats[mint] = pool_stats
-
         return stats
     except Exception as e:
         logging.error(f"Ultra API Error: {e}")
@@ -143,17 +157,13 @@ def parse_created_to_hours(created_str: str) -> int:
     try:
         if created_str == "N/A":
             return 0
-
         parts = created_str.split()
         if len(parts) >= 4 and "day" in parts[1]:
             days = int(parts[0])
             hours = int(parts[2])
             return days * 24 + hours
-
         if len(parts) >= 2 and "hour" in parts[1]:
-            hours = int(parts[0])
-            return hours
-
+            return int(parts[0])
         return 0
     except Exception:
         return 0
@@ -181,23 +191,15 @@ def get_true_averages(p: dict, key: str) -> float:
         if all(v == 0 for v in filtered):
             return 0.0
         return sum(filtered) / len(filtered)
-
     return 0.0
 
 
 def compute_entry_score(vol_liq_5m: float, vol_liq_1h: float, ratio_min30: float) -> float:
-    # Heat: 0 at 0.3, 1 at 1.0 (cap)
     heat = clamp((vol_liq_5m - 0.3) / 0.7, 0.0, 1.0)
-
-    # Acceleration: 0 at parity, 1 at 2x (cap)
     accel_ratio = vol_liq_5m / (vol_liq_1h + EPS)
     accel = clamp((accel_ratio - 1.0) / 1.0, 0.0, 1.0)
-
-    # Fee boost: 0 at ratio=2, 1 at ratio=10 (cap)
     fee = clamp((ratio_min30 - 2.0) / 8.0, 0.0, 1.0)
-
-    score = 100.0 * (0.50 * heat + 0.35 * accel + 0.15 * fee)
-    return float(score)
+    return float(100.0 * (0.50 * heat + 0.35 * accel + 0.15 * fee))
 
 
 def compute_exit_score(
@@ -206,15 +208,10 @@ def compute_exit_score(
     ratio_min30: float,
     entry_ratio_min30: float,
 ) -> float:
-    # Fee drop severity: 0 when above entry, 1 when ratio -> 0
     fee_drop = clamp((entry_ratio_min30 - ratio_min30) / (entry_ratio_min30 + EPS), 0.0, 1.0)
-
-    # Cooldown severity: 0 when v5 >= 0.5*v1, 1 when v5 -> 0 (relative to 0.5*v1)
     target = COOLDOWN_MULTIPLIER * vol_liq_1h
     cool = clamp((target - vol_liq_5m) / (target + EPS), 0.0, 1.0)
-
-    score = 100.0 * (0.65 * fee_drop + 0.35 * cool)
-    return float(score)
+    return float(100.0 * (0.65 * fee_drop + 0.35 * cool))
 
 
 def process_pairs(
@@ -224,7 +221,6 @@ def process_pairs(
     ultra_stats: Dict[str, dict],
 ) -> List[dict]:
     processed: List[dict] = []
-
     for p in raw_pairs:
         mint_x = p.get("mint_x", "N/A")
         mint_y = p.get("mint_y", "N/A")
@@ -234,20 +230,10 @@ def process_pairs(
             continue
 
         address = p.get("address", "N/A")
-        meteora_link = (
-            f"<a href='https://app.meteora.ag/dlmm/{address}' target='_blank' style='white-space:nowrap;'>meteora</a>"
-        )
-        dexscreener_link = (
-            f"<a href='https://dexscreener.com/solana/{mint_x}' target='_blank' style='white-space:nowrap;'>dex</a>"
-        )
-        jupiter_link = (
-            f"<a href='https://jup.ag/swap?sell=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&buy={mint_x}' "
-            f"target='_blank' style='white-space:nowrap;'>jupiter</a>"
-        )
-        combined_links = (
-            "<div style='text-align:center;line-height:1.2;'>"
-            f"{meteora_link}<br>{dexscreener_link}<br>{jupiter_link}</div>"
-        )
+        meteora_link = f"<a href='https://app.meteora.ag/dlmm/{address}' target='_blank' style='white-space:nowrap;'>meteora</a>"
+        dexscreener_link = f"<a href='https://dexscreener.com/solana/{mint_x}' target='_blank' style='white-space:nowrap;'>dex</a>"
+        jupiter_link = f"<a href='https://jup.ag/swap?sell=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&buy={mint_x}' target='_blank' style='white-space:nowrap;'>jupiter</a>"
+        combined_links = f"<div style='text-align:center;line-height:1.2;'>{meteora_link}<br>{dexscreener_link}<br>{jupiter_link}</div>"
 
         decimals_x = extra.get("decimals", 9)
         reserve_x = float(p.get("reserve_x_amount", 0)) / (10**decimals_x)
@@ -265,7 +251,6 @@ def process_pairs(
         usd_x = reserve_x * price_x
         usd_y = reserve_y * price_y
         total = usd_x + usd_y
-
         percent_x = (usd_x / total * 100) if total > 0 else 0
 
         created_str = format_created_at(extra.get("createdAt", ""))
@@ -277,7 +262,6 @@ def process_pairs(
         vol_min30 = float(p.get("volume", {}).get("min_30", 0))
         ratio_min30 = float(p.get("fee_tvl_ratio", {}).get("min_30", 0))
         mcap = extra.get("mcap", 0)
-
         custom_sort = vol_min30 * ratio_min30 * mcap if ratio_min30 >= 2 else None
 
         ultra = ultra_stats.get(mint_x, {})
@@ -290,8 +274,7 @@ def process_pairs(
             sell_vol = float(tf_stats.get("sellVolume", 0))
             total_vol = buy_vol + sell_vol
             vol_liq = (total_vol / ultra_liquidity) if ultra_liquidity > 0 else 0.0
-            tf_name = tf.replace("stats", "vol/liq ")
-            vol_liq_dict[tf_name] = vol_liq
+            vol_liq_dict[tf.replace("stats", "vol/liq ")] = vol_liq
 
         item: Dict[str, Any] = {
             "Links": combined_links,
@@ -339,17 +322,12 @@ def process_pairs(
     return processed
 
 
-# ----------------------------
-# Filter helpers
-# ----------------------------
 def get_safe_default(min_val: float, max_val: float, values_list: List[float]) -> float:
     if min_val > 0:
         return min_val
-
     non_zero_values = sorted([v for v in values_list if v > 0])
     if non_zero_values:
         return non_zero_values[0]
-
     return max_val
 
 
@@ -364,11 +342,7 @@ def safe_session_number(key: str, min_val: float, max_val: float, default: float
     return st.session_state[key]
 
 
-# ----------------------------
-# Position tracking + signals
-# ----------------------------
 def init_positions_state() -> None:
-    # positions: { address: {"entry_ratio_min30": float, "entered_at": iso_str} }
     if "positions" not in st.session_state or not isinstance(st.session_state.positions, dict):
         st.session_state.positions = {}
 
@@ -378,12 +352,8 @@ def parse_positions_text(text: str) -> List[str]:
     return [ln for ln in lines if ln]
 
 
-def compute_signals(
-    pairs: List[dict],
-    positions: Dict[str, Dict[str, Any]],
-) -> List[dict]:
+def compute_signals(pairs: List[dict], positions: Dict[str, Dict[str, Any]]) -> List[dict]:
     enriched: List[dict] = []
-
     for p in pairs:
         address = p.get("Address", "")
         v5 = float(p.get("vol/liq 5m", 0) or 0)
@@ -417,13 +387,9 @@ def compute_signals(
         p2["Entry Ratio"] = entry_ratio
         p2["Entered At"] = entered_at
         enriched.append(p2)
-
     return enriched
 
 
-# ----------------------------
-# Table formatting + rendering
-# ----------------------------
 def format_columns(df: pd.DataFrame) -> pd.DataFrame:
     formatters = {
         "Liquidity ($)": lambda x: f"{x:,.2f}",
@@ -574,11 +540,11 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     def row_style(row: pd.Series) -> List[str]:
         sig = str(row.get("Signal", ""))
         if sig == "ENTER":
-            return ["background-color: #0b3d0b; color: #fff;"] * len(row)  # green
+            return ["background-color: #0b3d0b; color: #fff;"] * len(row)
         if sig == "IN POSITION":
-            return ["background-color: #6b5b00; color: #fff;"] * len(row)  # yellow-ish
+            return ["background-color: #6b5b00; color: #fff;"] * len(row)
         if sig == "EXIT":
-            return ["background-color: #5a0b0b; color: #fff;"] * len(row)  # red
+            return ["background-color: #5a0b0b; color: #fff;"] * len(row)
         return [""] * len(row)
 
     styled_df = df.style.apply(row_style, axis=1)
@@ -594,16 +560,14 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     )
 
 
-# ----------------------------
-# App
-# ----------------------------
 def main() -> None:
     st.title("Meteora Pool Scoring Dashboard")
     st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting, filters, and signals.")
 
-    enable_auto_refresh(30)
     init_positions_state()
-    st.caption(f"Last updated (UTC): {now_utc_iso()} | Auto-refresh: 30s")
+    ensure_autorefresh_state(interval_sec=30)
+
+    st.caption(f"Last updated (UTC): {now_utc_iso()} | Auto-refresh: 30s (session-safe)")
 
     data = fetch_data(API_URL)
     sol_price = fetch_sol_price()
@@ -647,8 +611,9 @@ def main() -> None:
     apply_filters = False
     with st.sidebar:
         with st.expander("🔁 Refresh", expanded=True):
-            st.write("Auto-refresh is enabled (30s) via browser refresh.")
+            st.write("Auto-refresh keeps your positions/filters.")
             if st.button("Refresh now"):
+                st.session_state.next_refresh_ts = time.time()  # trigger immediately
                 st.rerun()
 
         with st.expander("🧾 Position Tracking", expanded=True):
@@ -700,9 +665,7 @@ def main() -> None:
                 label="",
                 min_value=min_mcap,
                 max_value=max_mcap,
-                value=safe_session_number(
-                    "filter_input_min_mcap", min_mcap, max_mcap, min_mcap_default
-                ),
+                value=safe_session_number("filter_input_min_mcap", min_mcap, max_mcap, min_mcap_default),
                 step=1000,
                 key="filter_input_min_mcap",
             )
@@ -713,9 +676,7 @@ def main() -> None:
                 label="",
                 min_value=min_vol_30,
                 max_value=max_vol_30,
-                value=safe_session_number(
-                    "filter_input_min_vol_30", min_vol_30, max_vol_30, min_vol_30_default
-                ),
+                value=safe_session_number("filter_input_min_vol_30", min_vol_30, max_vol_30, min_vol_30_default),
                 step=1.0,
                 key="filter_input_min_vol_30",
             )
@@ -756,9 +717,7 @@ def main() -> None:
 
     filtered_pairs = st.session_state.filtered_pairs
     if not filtered_pairs:
-        st.warning(
-            "No pools match your filter settings. Try lowering the minimum MCAP, pool age, 30 min volume, or min ratio."
-        )
+        st.warning("No pools match your filter settings. Try lowering your filter thresholds.")
         return
 
     signaled_pairs = compute_signals(filtered_pairs, st.session_state.positions)
@@ -791,29 +750,8 @@ def main() -> None:
         "Vol min30",
         "Fee min30",
         "Ratio min30",
-        "Vol 1h",
-        "Fee 1h",
-        "Ratio 1h",
-        "Vol 2h",
-        "Fee 2h",
-        "Ratio 2h",
-        "Vol 4h",
-        "Fee 4h",
-        "Ratio 4h",
-        "Vol 12h",
-        "Fee 12h",
-        "Ratio 12h",
-        "Vol 24h",
-        "Fee 24h",
-        "Ratio 24h",
         "Liquidity ($)",
-        "LP Ratio",
         "MCAP",
-        "Fees 24h ($)",
-        "Trade Vol 24h ($)",
-        "Avg Vol",
-        "Avg Fee",
-        "Avg Ratio",
         "Custom Sort",
         "vol/liq 5m",
         "vol/liq 1h",
@@ -828,21 +766,8 @@ def main() -> None:
 
     display_table(signaled_pairs, sort_field, reverse)
 
-    st.markdown("### Top Entry Candidates (by Entry Score)")
-    entries = [p for p in signaled_pairs if p.get("Signal") == "ENTER"]
-    if entries:
-        top_entries = sorted(entries, key=lambda x: float(x.get("Entry Score", 0) or 0), reverse=True)[:10]
-        display_table(top_entries, "Entry Score", True)
-    else:
-        st.write("No ENTER candidates right now.")
-
-    st.markdown("### My Positions - Exit Watch (by Exit Score)")
-    inpos = [p for p in signaled_pairs if p.get("Signal") in ("IN POSITION", "EXIT")]
-    if inpos:
-        top_exits = sorted(inpos, key=lambda x: float(x.get("Exit Score", 0) or 0), reverse=True)[:10]
-        display_table(top_exits, "Exit Score", True)
-    else:
-        st.write("No tracked positions in the current filtered set.")
+    # Finally: perform the ticking auto-refresh (keeps state)
+    autorefresh_tick()
 
 
 if __name__ == "__main__":
