@@ -1,11 +1,10 @@
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import requests
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
@@ -27,6 +26,20 @@ EXIT_RATIO_DROP_MULTIPLIER = 0.90  # exit when Ratio min30 < entry_ratio * 0.90
 COOLDOWN_MULTIPLIER = 0.5  # momentum cooling when vol/liq 5m < 0.5 * vol/liq 1h
 
 EPS = 1e-12
+
+
+# ----------------------------
+# Auto-refresh (no extra deps)
+# ----------------------------
+def enable_auto_refresh(seconds: int = 30) -> None:
+    """
+    Browser-level refresh every N seconds.
+    Works on Streamlit Cloud without any external dependencies.
+    """
+    st.markdown(
+        f"<meta http-equiv='refresh' content='{int(seconds)}'>",
+        unsafe_allow_html=True,
+    )
 
 
 # ----------------------------
@@ -254,7 +267,6 @@ def process_pairs(
         total = usd_x + usd_y
 
         percent_x = (usd_x / total * 100) if total > 0 else 0
-        percent_y = 100 - percent_x  # kept for parity (even though not directly used)
 
         created_str = format_created_at(extra.get("createdAt", ""))
 
@@ -271,7 +283,6 @@ def process_pairs(
         ultra = ultra_stats.get(mint_x, {})
         ultra_liquidity = float(ultra.get("ultra_liquidity", 0))
 
-        # Calculate vol/liq for the correct timeframes only
         vol_liq_dict: Dict[str, float] = {}
         for tf in ULTRA_TIMEFRAMES:
             tf_stats = ultra.get(tf, {})
@@ -371,14 +382,6 @@ def compute_signals(
     pairs: List[dict],
     positions: Dict[str, Dict[str, Any]],
 ) -> List[dict]:
-    """
-    Adds:
-      - Entry Score
-      - Exit Score
-      - Signal (ENTER/HOLD/IN POSITION/EXIT)
-      - Entry Ratio (for positions)
-      - Entered At (for positions)
-    """
     enriched: List[dict] = []
 
     for p in pairs:
@@ -393,7 +396,6 @@ def compute_signals(
         entry_ratio = float(positions.get(address, {}).get("entry_ratio_min30", 0) or 0)
         entered_at = positions.get(address, {}).get("entered_at", "")
 
-        # Exit logic (buffered 10% drop) and/or cooldown
         ratio_exit = (entry_ratio > 0) and (r30 < entry_ratio * EXIT_RATIO_DROP_MULTIPLIER)
         cooldown_exit = v5 < (COOLDOWN_MULTIPLIER * v1)
 
@@ -401,7 +403,6 @@ def compute_signals(
         if in_pos and entry_ratio > 0:
             exit_score = compute_exit_score(v5, v1, r30, entry_ratio)
 
-        # Entry logic
         entry_ok = (v5 > ENTRY_VOL_LIQ_5M_MIN) and (v5 > v1)
 
         if not in_pos:
@@ -448,7 +449,6 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Entry Ratio": lambda x: f"{x:.2f}" if isinstance(x, (float, int)) else "",
     }
 
-    # Format all vol/liq columns
     for tf in ULTRA_TIMEFRAMES:
         colname = tf.replace("stats", "vol/liq ")
         formatters[colname] = lambda x: f"{float(x):.5f}"
@@ -512,7 +512,6 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
         "Cum Trade Vol",
         "Cum Fee Vol",
         "Custom Sort",
-        # Only the correct vol/liq timeframes
         *[tf.replace("stats", "vol/liq ") for tf in ULTRA_TIMEFRAMES],
         "Address",
     ]
@@ -602,11 +601,8 @@ def main() -> None:
     st.title("Meteora Pool Scoring Dashboard")
     st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting, filters, and signals.")
 
-    # Auto-refresh every 30 seconds
-    st_autorefresh(interval=30_000, key="auto_refresh_30s")
-
+    enable_auto_refresh(30)
     init_positions_state()
-
     st.caption(f"Last updated (UTC): {now_utc_iso()} | Auto-refresh: 30s")
 
     data = fetch_data(API_URL)
@@ -625,7 +621,6 @@ def main() -> None:
         st.warning("No pairs passed the filtering (organicScore ≥ 74.9).")
         return
 
-    # Filters (existing behavior)
     created_hours = [parse_created_to_hours(p["Created"]) for p in pairs]
     mcap_values = [p["MCAP"] for p in pairs]
     vol_30mins_list = [p["Vol min30"] for p in pairs]
@@ -652,9 +647,8 @@ def main() -> None:
     apply_filters = False
     with st.sidebar:
         with st.expander("🔁 Refresh", expanded=True):
-            st.write("Auto-refresh is enabled (30s).")
-            manual_refresh = st.button("Refresh now")
-            if manual_refresh:
+            st.write("Auto-refresh is enabled (30s) via browser refresh.")
+            if st.button("Refresh now"):
                 st.rerun()
 
         with st.expander("🧾 Position Tracking", expanded=True):
@@ -675,7 +669,6 @@ def main() -> None:
                 st.rerun()
 
             if sync_positions:
-                # Keep existing entry metadata when possible.
                 new_addrs = set(parse_positions_text(positions_text))
                 old = st.session_state.positions
 
@@ -768,19 +761,15 @@ def main() -> None:
         )
         return
 
-    # Compute signals for the filtered list
     signaled_pairs = compute_signals(filtered_pairs, st.session_state.positions)
 
-    # "Enter/Exit" controls based on table addresses
     st.markdown("#### Quick Position Actions")
     addresses_in_table = sorted({p.get("Address", "") for p in signaled_pairs if p.get("Address")})
-    default_pick = addresses_in_table[0] if addresses_in_table else ""
     pick = st.selectbox("Select pool Address:", options=addresses_in_table, index=0 if addresses_in_table else None)
 
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Mark as ENTERED (store entry ratio)"):
-            # Find selected pool row and store entry_ratio_min30
             row = next((p for p in signaled_pairs if p.get("Address") == pick), None)
             if row:
                 st.session_state.positions[pick] = {
@@ -795,7 +784,6 @@ def main() -> None:
                 st.session_state.positions.pop(pick, None)
                 st.rerun()
 
-    # Sort options (extended with signals/scores)
     sort_options = [
         "Entry Score",
         "Exit Score",
@@ -840,7 +828,6 @@ def main() -> None:
 
     display_table(signaled_pairs, sort_field, reverse)
 
-    # Optional: small ranked views
     st.markdown("### Top Entry Candidates (by Entry Score)")
     entries = [p for p in signaled_pairs if p.get("Signal") == "ENTER"]
     if entries:
