@@ -207,7 +207,8 @@ def process_pairs(
             vol_liq_dict[tf_name] = vol_liq
 
         item: Dict[str, Any] = {
-            "Address": address,
+            "Address_full": address,  # keep full for CSV/copy
+            "Address": address,       # will render truncated in HTML
             "Links": combined_links,
             "Name": p.get("name", "N/A"),
             "MCAP": mcap,
@@ -285,13 +286,12 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
-    df = pd.DataFrame(pairs)
+    df_raw = pd.DataFrame(pairs)
+    df = df_raw.copy()
     df = format_columns(df)
 
-    # spacer columns for visual separation
-    spacer1 = " "
-    spacer2 = "  "
-    spacer3 = "   "
+    # spacer columns for visual separation (wider)
+    spacer1, spacer2, spacer3 = " ", "  ", "   "
 
     columns = [
         "Address",
@@ -325,6 +325,12 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             df[col] = "" if "vol/liq" not in col else 0.0
 
     df = df[[col for col in columns if col in df.columns]]
+
+    # Prepare address truncated display with full copy on double-click
+    if "Address" in df.columns and "Address_full" in df_raw.columns:
+        df["Address"] = df_raw["Address_full"].apply(
+            lambda full: f"<span class='addr-copy' data-full='{full}'>{full[:4]}…</span>"
+        )
 
     try:
         sort_vals = df[sort_field].replace({",": "", "%": ""}, regex=True).astype(float)
@@ -365,23 +371,47 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             overflow-wrap: anywhere !important;
         }
         td[data-label="Address"] {
-            max-width: 500px !important;
-            white-space: normal !important;
-            overflow-wrap: anywhere !important;
-            word-break: break-all !important;
+            max-width: 120px !important;
         }
+        /* Wider spacers */
+        td[data-label=" "],
+        th[data-label=" "] { min-width: 28px !important; }
+        td[data-label="  "],
+        th[data-label="  "] { min-width: 36px !important; }
+        td[data-label="   "],
+        th[data-label="   "] { min-width: 44px !important; }
+
         .high-ratio-row {
             background-color: #7d3c98 !important;
             color: #fff !important;
         }
+        /* Address copy cursor */
+        .addr-copy { cursor: copy; }
         </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # JS to copy full address on double-click
+    st.markdown(
+        """
+        <script>
+        document.addEventListener('DOMContentLoaded', () => {
+          document.querySelectorAll('.addr-copy').forEach(el => {
+            el.addEventListener('dblclick', () => {
+              const full = el.getAttribute('data-full') || '';
+              navigator.clipboard.writeText(full).catch(() => {});
+            });
+          });
+        });
+        </script>
         """,
         unsafe_allow_html=True,
     )
 
     def row_style(row: pd.Series) -> List[str]:
         try:
-            if float(row["Ratio 30 min"]) > 10:
+            if float(str(row["Ratio 30 min"]).replace(",", "")) > 10:
                 return ["background-color: #7d3c98; color: #fff;"] * len(row)
         except Exception:
             pass
@@ -392,9 +422,12 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     st.write("### Meteora Pools Table")
     st.markdown(styled_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
+    # CSV with full addresses
+    csv_df = df_raw.copy()
+    csv_df = csv_df.drop(columns=["Address_full"], errors="ignore").rename(columns={"Address_full": "Address"})
     st.download_button(
         label="Download table as CSV",
-        data=df.to_csv(index=False),
+        data=csv_df.to_csv(index=False),
         file_name="meteora_pools.csv",
         mime="text/csv",
     )
