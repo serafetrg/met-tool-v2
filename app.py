@@ -206,7 +206,6 @@ def process_pairs(
         total = usd_x + usd_y
 
         percent_x = (usd_x / total * 100) if total > 0 else 0
-        percent_y = 100 - percent_x  # kept for parity (even though not directly used)
 
         created_str = format_created_at(extra.get("createdAt", ""))
 
@@ -255,18 +254,6 @@ def process_pairs(
             "Fee 1h": float(p.get("fees", {}).get("hour_1", 0)),
             "Ratio 1h": float(p.get("fee_tvl_ratio", {}).get("hour_1", 0)),
             "Vol 2h": float(p.get("volume", {}).get("hour_2", 0)),
-            "Fee 2h": float(p.get("fees", {}).get("hour_2", 0)),
-            "Ratio 2h": float(p.get("fee_tvl_ratio", {}).get("hour_2", 0)),
-            "Vol 4h": float(p.get("volume", {}).get("hour_4", 0)),
-            "Fee 4h": float(p.get("fees", {}).get("hour_4", 0)),
-            "Ratio 4h": float(p.get("fee_tvl_ratio", {}).get("hour_4", 0)),
-            "Vol 12h": float(p.get("volume", {}).get("hour_12", 0)),
-            "Fee 12h": float(p.get("fees", {}).get("hour_12", 0)),
-            "Ratio 12h": float(p.get("fee_tvl_ratio", {}).get("hour_12", 0)),
-            "Vol 24h": float(p.get("volume", {}).get("hour_24", 0)),
-            "Fee 24h": float(p.get("fees", {}).get("hour_24", 0)),
-            "Ratio 24h": float(p.get("fee_tvl_ratio", {}).get("hour_24", 0)),
-            "Fees 24h ($)": float(p.get("fees_24h", 0)),
             "Today Fees ($)": float(p.get("today_fees", 0)),
             "Trade Vol 24h ($)": float(p.get("trade_volume_24h", 0)),
             "Cum Trade Vol": float(p.get("cumulative_trade_volume", 0)),
@@ -322,7 +309,6 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         "MCAP": lambda x: f"{x:,.2f}",
         "Organic Score": lambda x: f"{x:.2f}",
         "LP Ratio": lambda x: f"{x:.0f}% / {100 - float(x):.0f}%" if isinstance(x, (float, int)) else x,
-        "Fees 24h ($)": lambda x: f"{x:,.2f}",
         "Today Fees ($)": lambda x: f"{x:,.2f}",
         "Trade Vol 24h ($)": lambda x: f"{x:,.2f}",
         "Cum Trade Vol": lambda x: f"{x:,.2f}",
@@ -335,10 +321,16 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         colname = tf.replace("stats", "vol/liq ")
         formatters[colname] = lambda x: f"{float(x):.5f}"
 
-    for tf in ["1h", "2h", "4h", "12h", "24h"]:
-        formatters[f"Vol {tf}"] = lambda x: f"{x:,.2f}"
-        formatters[f"Fee {tf}"] = lambda x: f"{x:,.2f}"
-        formatters[f"Ratio {tf}"] = lambda x: f"{x:.2f}"
+    # Hourly columns to keep
+    hourly_number_cols = [
+        "Vol 1h",
+        "Fee 1h",
+        "Ratio 1h",
+        "Vol 2h",
+    ]
+
+    for col in hourly_number_cols:
+        formatters[col] = (lambda c: (lambda x: f"{x:,.2f}" if "Vol" in c or "Fee" in c else f"{x:.2f}"))(col)
 
     for col, func in formatters.items():
         if col in df.columns:
@@ -372,18 +364,6 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
         "Fee 1h",
         "Ratio 1h",
         "Vol 2h",
-        "Fee 2h",
-        "Ratio 2h",
-        "Vol 4h",
-        "Fee 4h",
-        "Ratio 4h",
-        "Vol 12h",
-        "Fee 12h",
-        "Ratio 12h",
-        "Vol 24h",
-        "Fee 24h",
-        "Ratio 24h",
-        "Fees 24h ($)",
         "Today Fees ($)",
         "Trade Vol 24h ($)",
         "Cum Trade Vol",
@@ -602,7 +582,7 @@ def main() -> None:
         )
         return
 
-    # Only correct vol/liq sort options
+    # Only correct sort options
     sort_options = [
         "Vol min30",
         "Fee min30",
@@ -611,21 +591,10 @@ def main() -> None:
         "Fee 1h",
         "Ratio 1h",
         "Vol 2h",
-        "Fee 2h",
-        "Ratio 2h",
-        "Vol 4h",
-        "Fee 4h",
-        "Ratio 4h",
-        "Vol 12h",
-        "Fee 12h",
-        "Ratio 12h",
-        "Vol 24h",
-        "Fee 24h",
-        "Ratio 24h",
         "Liquidity ($)",
         "LP Ratio",
         "MCAP",
-        "Fees 24h ($)",
+        "Today Fees ($)",
         "Trade Vol 24h ($)",
         "Avg Vol",
         "Avg Fee",
