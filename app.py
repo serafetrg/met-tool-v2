@@ -137,25 +137,6 @@ def parse_created_to_hours(created_str: str) -> int:
 # ----------------------------
 # Pair processing helpers
 # ----------------------------
-def get_true_averages(p: dict, key: str) -> float:
-    timeframes = [1, 2, 4, 12, 24]
-    values = [float(p.get(key, {}).get(f"hour_{tf}", 0)) for tf in timeframes]
-
-    filtered: List[float] = []
-    last_val: Optional[float] = None
-    for val in values:
-        if last_val is None or val != last_val:
-            filtered.append(val)
-        last_val = val
-
-    if filtered:
-        if all(v == 0 for v in filtered):
-            return 0.0
-        return sum(filtered) / len(filtered)
-
-    return 0.0
-
-
 def process_pairs(
     raw_pairs: List[dict],
     jupiter_data: Dict[str, dict],
@@ -209,10 +190,6 @@ def process_pairs(
 
         created_str = format_created_at(extra.get("createdAt", ""))
 
-        avg_vol = get_true_averages(p, "volume")
-        avg_fee = get_true_averages(p, "fees")
-        avg_ratio = get_true_averages(p, "fee_tvl_ratio")
-
         vol_min30 = float(p.get("volume", {}).get("min_30", 0))
         ratio_min30 = float(p.get("fee_tvl_ratio", {}).get("min_30", 0))
         mcap = extra.get("mcap", 0)
@@ -248,7 +225,6 @@ def process_pairs(
             "Vol 1h": float(p.get("volume", {}).get("hour_1", 0)),
             "Fee 1h": float(p.get("fees", {}).get("hour_1", 0)),
             "Ratio 1h": float(p.get("fee_tvl_ratio", {}).get("hour_1", 0)),
-            "Custom Sort": None,  # placeholder to keep consistent structure if needed
             "Address": address,
         }
         item.update(vol_liq_dict)
@@ -263,11 +239,9 @@ def process_pairs(
 def get_safe_default(min_val: float, max_val: float, values_list: List[float]) -> float:
     if min_val > 0:
         return min_val
-
     non_zero_values = sorted([v for v in values_list if v > 0])
     if non_zero_values:
         return non_zero_values[0]
-
     return max_val
 
 
@@ -298,17 +272,11 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         "LP Ratio": lambda x: f"{x:.0f}% / {100 - float(x):.0f}%" if isinstance(x, (float, int)) else x,
     }
 
-    # Format all vol/liq columns
     for tf in ULTRA_TIMEFRAMES:
         colname = tf.replace("stats", "vol/liq ")
         formatters[colname] = lambda x: f"{float(x):.5f}"
 
-    # Hourly columns to keep
-    hourly_number_cols = [
-        "Vol 1h",
-        "Fee 1h",
-        "Ratio 1h",
-    ]
+    hourly_number_cols = ["Vol 1h", "Fee 1h", "Ratio 1h"]
     for col in hourly_number_cols:
         formatters[col] = (lambda c: (lambda x: f"{x:,.2f}" if "Vol" in c or "Fee" in c else f"{x:.2f}"))(col)
 
@@ -340,7 +308,6 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
         "Vol 1h",
         "Fee 1h",
         "Ratio 1h",
-        # Only the correct vol/liq timeframes
         *[tf.replace("stats", "vol/liq ") for tf in ULTRA_TIMEFRAMES],
         "Address",
     ]
@@ -553,7 +520,6 @@ def main() -> None:
         )
         return
 
-    # Only correct sort options
     sort_options = [
         "Vol min30",
         "Fee min30",
