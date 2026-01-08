@@ -422,7 +422,7 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             pass
         return [""] * len(row)
 
-    styled_df = df.style.apply(row_style, axis1)
+    styled_df = df.style.apply(row_style, axis=1)  # <-- fixed axis
 
     st.write("### Meteora Pool Scoring Dashboard 2")
     st.write("This dashboard fetches data from Jupiter and Meteora then scores pools")
