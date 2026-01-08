@@ -13,11 +13,28 @@ API_URL = (
     "limit=100&sort_key=feetvlratio1h&order_by=desc&include_unknown=true&hide_low_tvl=1000"
     "&hide_low_apr=true&include_token_mints=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v%2C%20So11111111111111111111111111111111111111112"
 )
-JUPITER_SEARCH_URL = "https://lite-api.jup.ag/tokens/v2/search?query="
-JUPITER_ULTRA_URL = "https://lite-api.jup.ag/ultra/v1/search?query="
-SOL_PRICE_URL = "https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112"
+JUPITER_SEARCH_URL = "https://api.jup.ag/tokens/v2/search?query="
+JUPITER_ULTRA_URL = "https://api.jup.ag/ultra/v1/search?query="
+SOL_PRICE_URL = "https://api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112"
+
+# <<< HARD-CODE YOUR KEY HERE >>>
+JUP_API_KEY = "c75a3409-052b-4ac7-8d1a-dae7263dd6a1"
 
 ULTRA_TIMEFRAMES = ["stats5m", "stats1h", "stats6h", "stats24h"]
+
+
+# ----------------------------
+# Jupiter headers helper
+# ----------------------------
+def jup_headers() -> Dict[str, str]:
+    return {"x-api-key": JUP_API_KEY} if JUP_API_KEY else {}
+
+
+def require_api_key() -> bool:
+    if not JUP_API_KEY:
+        st.warning("Please hardcode your Jupiter API key in JUP_API_KEY.")
+        return False
+    return True
 
 
 # ----------------------------
@@ -37,10 +54,11 @@ def fetch_data(api_url: str) -> Optional[dict]:
 def fetch_jupiter_data(mint_addresses: List[str]) -> Dict[str, Dict[str, Any]]:
     if not mint_addresses:
         return {}
-
+    if not require_api_key():
+        return {}
     query = ",".join(mint_addresses)
     try:
-        response = requests.get(f"{JUPITER_SEARCH_URL}{query}", timeout=15)
+        response = requests.get(f"{JUPITER_SEARCH_URL}{query}", headers=jup_headers(), timeout=15)
         response.raise_for_status()
         data = response.json()
         return {
@@ -64,10 +82,11 @@ def fetch_ultra_stats(mint_addresses: List[str]) -> Dict[str, dict]:
     stats: Dict[str, dict] = {}
     if not mint_addresses:
         return stats
-
+    if not require_api_key():
+        return stats
     query = ",".join(mint_addresses[:100])
     try:
-        response = requests.get(f"{JUPITER_ULTRA_URL}{query}", timeout=20)
+        response = requests.get(f"{JUPITER_ULTRA_URL}{query}", headers=jup_headers(), timeout=20)
         response.raise_for_status()
         data = response.json()
 
@@ -85,8 +104,10 @@ def fetch_ultra_stats(mint_addresses: List[str]) -> Dict[str, dict]:
 
 
 def fetch_sol_price() -> float:
+    if not require_api_key():
+        return 0.0
     try:
-        response = requests.get(SOL_PRICE_URL, timeout=10)
+        response = requests.get(SOL_PRICE_URL, headers=jup_headers(), timeout=10)
         response.raise_for_status()
         data = response.json()
         return data.get("So11111111111111111111111111111111111111112", {}).get("usdPrice", 0)
@@ -401,7 +422,7 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             pass
         return [""] * len(row)
 
-    styled_df = df.style.apply(row_style, axis=1)
+    styled_df = df.style.apply(row_style, axis1)
 
     st.write("### Meteora Pool Scoring Dashboard 2")
     st.write("This dashboard fetches data from Jupiter and Meteora then scores pools")
