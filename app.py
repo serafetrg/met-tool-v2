@@ -17,7 +17,6 @@ JUPITER_SEARCH_URL = "https://lite-api.jup.ag/tokens/v2/search?query="
 JUPITER_ULTRA_URL = "https://lite-api.jup.ag/ultra/v1/search?query="
 SOL_PRICE_URL = "https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112"
 
-# Only the correct timeframes from Jupiter Ultra API
 ULTRA_TIMEFRAMES = ["stats5m", "stats1h", "stats6h", "stats24h"]
 
 
@@ -197,7 +196,6 @@ def process_pairs(
         ultra = ultra_stats.get(mint_x, {})
         ultra_liquidity = float(ultra.get("ultra_liquidity", 0))
 
-        # Calculate vol/liq for the correct timeframes only
         vol_liq_dict: Dict[str, float] = {}
         for tf in ULTRA_TIMEFRAMES:
             tf_stats = ultra.get(tf, {})
@@ -209,23 +207,23 @@ def process_pairs(
             vol_liq_dict[tf_name] = vol_liq
 
         item: Dict[str, Any] = {
+            "Address": address,
             "Links": combined_links,
             "Name": p.get("name", "N/A"),
-            "Liquidity ($)": float(p.get("liquidity", 0)),
-            "Vol min30": vol_min30,
-            "Fee min30": float(p.get("fees", {}).get("min_30", 0)),
-            "Ratio min30": ratio_min30,
+            "MCAP": mcap,
+            "Liquidity": float(p.get("liquidity", 0)),
+            "Created": created_str,
             "Bin Step": p.get("bin_step", "N/A"),
             "Base Fee %": float(p.get("base_fee_percentage", 0)),
             "Max Fee %": float(p.get("max_fee_percentage", 0)),
-            "Created": created_str,
-            "MCAP": mcap,
-            "Organic Score": extra.get("organicScore", 0),
             "LP Ratio": percent_x,
+            "Organic Score": extra.get("organicScore", 0),
+            "Vol 30 min": vol_min30,
             "Vol 1h": float(p.get("volume", {}).get("hour_1", 0)),
+            "Fee 30 min": float(p.get("fees", {}).get("min_30", 0)),
             "Fee 1h": float(p.get("fees", {}).get("hour_1", 0)),
+            "Ratio 30 min": ratio_min30,
             "Ratio 1h": float(p.get("fee_tvl_ratio", {}).get("hour_1", 0)),
-            "Address": address,
         }
         item.update(vol_liq_dict)
         processed.append(item)
@@ -261,24 +259,23 @@ def safe_session_number(key: str, min_val: float, max_val: float, default: float
 # ----------------------------
 def format_columns(df: pd.DataFrame) -> pd.DataFrame:
     formatters = {
-        "Liquidity ($)": lambda x: f"{x:,.2f}",
-        "Vol min30": lambda x: f"{x:,.2f}",
-        "Fee min30": lambda x: f"{x:,.2f}",
-        "Ratio min30": lambda x: f"{x:.2f}",
+        "Liquidity": lambda x: f"{x:,.2f}",
+        "Vol 30 min": lambda x: f"{x:,.2f}",
+        "Fee 30 min": lambda x: f"{x:,.2f}",
+        "Ratio 30 min": lambda x: f"{x:.2f}",
         "Base Fee %": lambda x: f"{x:.2f}%",
         "Max Fee %": lambda x: f"{x:.2f}%",
         "MCAP": lambda x: f"{x:,.2f}",
         "Organic Score": lambda x: f"{x:.2f}",
         "LP Ratio": lambda x: f"{x:.0f}% / {100 - float(x):.0f}%" if isinstance(x, (float, int)) else x,
+        "Vol 1h": lambda x: f"{x:,.2f}",
+        "Fee 1h": lambda x: f"{x:,.2f}",
+        "Ratio 1h": lambda x: f"{x:.2f}",
     }
 
     for tf in ULTRA_TIMEFRAMES:
         colname = tf.replace("stats", "vol/liq ")
         formatters[colname] = lambda x: f"{float(x):.5f}"
-
-    hourly_number_cols = ["Vol 1h", "Fee 1h", "Ratio 1h"]
-    for col in hourly_number_cols:
-        formatters[col] = (lambda c: (lambda x: f"{x:,.2f}" if "Vol" in c or "Fee" in c else f"{x:.2f}"))(col)
 
     for col, func in formatters.items():
         if col in df.columns:
@@ -291,35 +288,46 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     df = pd.DataFrame(pairs)
     df = format_columns(df)
 
+    # spacer columns for visual separation
+    spacer1 = " "
+    spacer2 = "  "
+    spacer3 = "   "
+
     columns = [
+        "Address",
         "Links",
         "Name",
-        "Liquidity ($)",
-        "Vol min30",
-        "Fee min30",
-        "Ratio min30",
+        "MCAP",
+        "Liquidity",
+        "Created",
+        spacer1,
         "Bin Step",
         "Base Fee %",
         "Max Fee %",
-        "Created",
-        "MCAP",
-        "Organic Score",
         "LP Ratio",
+        "Organic Score",
+        spacer2,
+        "Vol 30 min",
         "Vol 1h",
+        "Fee 30 min",
         "Fee 1h",
+        "Ratio 30 min",
         "Ratio 1h",
-        *[tf.replace("stats", "vol/liq ") for tf in ULTRA_TIMEFRAMES],
-        "Address",
+        spacer3,
+        "vol/liq 5m",
+        "vol/liq 1h",
+        "vol/liq 6h",
+        "vol/liq 24h",
     ]
 
     for col in columns:
         if col not in df.columns:
-            df[col] = 0.0 if "vol/liq" in col else ""
+            df[col] = "" if "vol/liq" not in col else 0.0
 
     df = df[[col for col in columns if col in df.columns]]
 
     try:
-        sort_vals = df[sort_field].str.replace(",", "").str.replace("%", "").astype(float)
+        sort_vals = df[sort_field].replace({",": "", "%": ""}, regex=True).astype(float)
         df = (
             df.assign(_sort_col=sort_vals)
             .sort_values("_sort_col", ascending=not reverse)
@@ -373,7 +381,7 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
 
     def row_style(row: pd.Series) -> List[str]:
         try:
-            if float(row["Ratio min30"]) > 10:
+            if float(row["Ratio 30 min"]) > 10:
                 return ["background-color: #7d3c98; color: #fff;"] * len(row)
         except Exception:
             pass
@@ -418,8 +426,8 @@ def main() -> None:
 
     created_hours = [parse_created_to_hours(p["Created"]) for p in pairs]
     mcap_values = [p["MCAP"] for p in pairs]
-    vol_30mins_list = [p["Vol min30"] for p in pairs]
-    ratio_min30_list = [p["Ratio min30"] for p in pairs]
+    vol_30mins_list = [p["Vol 30 min"] for p in pairs]
+    ratio_min30_list = [p["Ratio 30 min"] for p in pairs]
 
     min_age, max_age = int(min(created_hours)), int(max(created_hours))
     min_mcap, max_mcap = int(min(mcap_values)), int(max(mcap_values))
@@ -509,8 +517,8 @@ def main() -> None:
             for p in pairs
             if parse_created_to_hours(p["Created"]) >= st.session_state.filter_settings["min_age"]
             and p["MCAP"] >= st.session_state.filter_settings["min_mcap"]
-            and p["Vol min30"] >= st.session_state.filter_settings["min_vol_30"]
-            and p["Ratio min30"] >= st.session_state.filter_settings["min_ratio_min30"]
+            and p["Vol 30 min"] >= st.session_state.filter_settings["min_vol_30"]
+            and p["Ratio 30 min"] >= st.session_state.filter_settings["min_ratio_min30"]
         ]
 
     filtered_pairs = st.session_state.filtered_pairs
@@ -521,9 +529,9 @@ def main() -> None:
         return
 
     sort_options = [
-        "Vol min30",
-        "Fee min30",
-        "Ratio min30",
+        "Vol 30 min",
+        "Fee 30 min",
+        "Ratio 30 min",
         "Vol 1h",
         "Fee 1h",
         "Ratio 1h",
