@@ -263,12 +263,12 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Vol 1h": lambda x: f"{x:,.2f}",
         "Fee 1h": lambda x: f"{x:,.2f}",
         "Ratio 1h": lambda x: f"{x:.2f}",
-        "Pro Score": lambda x: f"{x:,.5f}",
+        "Pro Score": lambda x: f"{x:,.2f}",
     }
 
     for tf in ULTRA_TIMEFRAMES:
         colname = tf.replace("stats", "vol/liq ")
-        formatters[colname] = lambda x: f"{float(x):.5f}"
+        formatters[colname] = lambda x: f"{float(x):.2f}"
 
     for col, func in formatters.items():
         if col in df.columns:
@@ -361,7 +361,6 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             color: #fff !important;
         }
 
-        /* Sidebar spacing tighten: reduce gaps between label, caption, and input */
         [data-testid="stSidebar"] .block-container {
             padding-top: 0.4rem;
             padding-bottom: 0.6rem;
@@ -369,15 +368,16 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
         [data-testid="stSidebar"] [data-testid="stExpander"] {
             padding: 0.15rem 0.35rem;
         }
-        /* Group spacing: reduce margin between caption and input, add small gap after input */
         [data-testid="stSidebar"] [data-testid="stNumberInput"] > label {
+            margin-bottom: 0.05rem;
+        }
+        [data-testid="stSidebar"] [data-testid="stCaption"] {
             margin-bottom: 0.15rem;
         }
         [data-testid="stSidebar"] [data-testid="stNumberInput"] > div:nth-child(2) {
-            margin-top: 0.15rem;
-            margin-bottom: 0.35rem;
+            margin-top: 0.05rem;
+            margin-bottom: 0.30rem;
         }
-        /* Button invert: bright background, dark text */
         [data-testid="stSidebar"] button[kind="primary"] {
             background-color: #f0f2f6 !important;
             color: #1e1e1e !important;
@@ -403,7 +403,9 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
 
     styled_df = df.style.apply(row_style, axis=1)
 
-    st.write("### Meteora Pools Table")
+    st.write("### Meteora Pool Scoring Dashboard 2")
+    st.write("This dashboard fetches data from Jupiter and Meteora then scores pools")
+    st.info("Fetching and processing data takes up to 20 seconds on first load...")
     st.markdown(styled_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
     st.download_button(
