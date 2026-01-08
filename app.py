@@ -418,7 +418,7 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
 # App
 # ----------------------------
 def main() -> None:
-    st.title("Meteora Pool Scoring Dashboard v2")
+    st.title("Meteora Pool Scoring Dashboard 2")
     st.write("This dashboard fetches data from Jupiter and Meteora then scores pools")
     st.info("Fetching and processing data takes up to 20 seconds on first load...")
 
