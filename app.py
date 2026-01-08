@@ -210,7 +210,7 @@ def process_pairs(
             "Name": p.get("name", "N/A"),
             "MCAP": mcap,
             "Liquidity": float(p.get("liquidity", 0)),
-            "Created": created_str,
+            "Token Created": created_str,
             "Bin Step": p.get("bin_step", "N/A"),
             "Base Fee %": float(p.get("base_fee_percentage", 0)),
             "Max Fee %": float(p.get("max_fee_percentage", 0)),
@@ -275,35 +275,27 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     df = pd.DataFrame(pairs)
     df = format_columns(df)
 
-    # wider spacer columns for visual separation
-    spacer1 = "          "
-    spacer2 = "               "
-    spacer3 = "                    "
-
     columns = [
         "Links",
         "Name",
         "MCAP",
         "Liquidity",
-        "Created",
-        spacer1,
+        "Token Created",
         "Bin Step",
         "Base Fee %",
-        "Max Fee %",
-        "LP Ratio",
-        "Organic Score",
-        spacer2,
+        "vol/liq 5m",
+        "vol/liq 1h",
+        "vol/liq 6h",
+        "vol/liq 24h",
         "Vol 30 min",
         "Vol 1h",
         "Fee 30 min",
         "Fee 1h",
         "Ratio 30 min",
         "Ratio 1h",
-        spacer3,
-        "vol/liq 5m",
-        "vol/liq 1h",
-        "vol/liq 6h",
-        "vol/liq 24h",
+        "Max Fee %",
+        "LP Ratio",
+        "Organic Score",
     ]
 
     for col in columns:
@@ -404,7 +396,7 @@ def main() -> None:
         st.warning("No pairs passed the filtering (organicScore ≥ 74.9).")
         return
 
-    created_hours = [parse_created_to_hours(p["Created"]) for p in pairs]
+    created_hours = [parse_created_to_hours(p["Token Created"]) for p in pairs]
     mcap_values = [p["MCAP"] for p in pairs]
     vol_30mins_list = [p["Vol 30 min"] for p in pairs]
     ratio_min30_list = [p["Ratio 30 min"] for p in pairs]
@@ -427,7 +419,6 @@ def main() -> None:
             "min_ratio_min30": min_ratio_min30_default,
         }
 
-    # Use filter_settings values directly; don't pre-set widget keys to avoid Streamlit warning
     with st.sidebar:
         with st.expander("🔍 Filter Pools", expanded=True):
             st.markdown("**Minimum Pool Age (hours)**")
@@ -486,7 +477,7 @@ def main() -> None:
         st.session_state.filtered_pairs = [
             p
             for p in pairs
-            if parse_created_to_hours(p["Created"]) >= st.session_state.filter_settings["min_age"]
+            if parse_created_to_hours(p["Token Created"]) >= st.session_state.filter_settings["min_age"]
             and p["MCAP"] >= st.session_state.filter_settings["min_mcap"]
             and p["Vol 30 min"] >= st.session_state.filter_settings["min_vol_30"]
             and p["Ratio 30 min"] >= st.session_state.filter_settings["min_ratio_min30"]
