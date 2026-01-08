@@ -493,7 +493,7 @@ def main() -> None:
                 key="filter_input_min_ratio_min30",
             )
 
-            apply_filters = st.button("Apply Filters")
+            apply_filters = st.button("Update Data")
 
     if apply_filters or "filtered_pairs" not in st.session_state:
         st.session_state.filter_settings = {
