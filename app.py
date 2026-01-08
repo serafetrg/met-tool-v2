@@ -422,11 +422,9 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             pass
         return [""] * len(row)
 
-    styled_df = df.style.apply(row_style, axis=1)  # <-- fixed axis
+    styled_df = df.style.apply(row_style, axis=1)
 
-    st.write("### Meteora Pool Scoring Dashboard 2")
-    st.write("This dashboard fetches data from Jupiter and Meteora then scores pools")
-    st.info("Fetching and processing data takes up to 20 seconds on first load...")
+    # Table only (header/subtitle/info shown once in main)
     st.markdown(styled_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
     st.download_button(
@@ -563,6 +561,39 @@ def main() -> None:
     filtered_pairs = st.session_state.filtered_pairs
     if not filtered_pairs:
         st.warning(
+            "No pools match your filter settings. Try lowering the minimum MCAP, pool age, 30 min volume, or min ratio."
+        )
+        return
+
+    sort_options = [
+        "Vol 30 min",
+        "Fee 30 min",
+        "Ratio 30 min",
+        "Vol 1h",
+        "Fee 1h",
+        "Ratio 1h",
+        "vol/liq 5m",
+        "vol/liq 1h",
+        "vol/liq 6h",
+        "vol/liq 24h",
+        "Pro Score",
+    ]
+
+    st.markdown("#### Sort By")
+    sort_field = st.radio(
+        "Choose sort field:",
+        sort_options,
+        index=0,
+        horizontal=True,
+    )
+    order = st.radio("Sort order:", options=["Descending", "Ascending"], index=0, horizontal=True)
+    reverse = True if order == "Descending" else False
+
+    display_table(filtered_pairs, sort_field, reverse)
+
+
+if __name__ == "__main__":
+    main()
             "No pools match your filter settings. Try lowering the minimum MCAP, pool age, 30 min volume, or min ratio."
         )
         return
