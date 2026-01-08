@@ -217,8 +217,6 @@ def process_pairs(
         ratio_min30 = float(p.get("fee_tvl_ratio", {}).get("min_30", 0))
         mcap = extra.get("mcap", 0)
 
-        custom_sort = vol_min30 * ratio_min30 * mcap if ratio_min30 >= 2 else None
-
         ultra = ultra_stats.get(mint_x, {})
         ultra_liquidity = float(ultra.get("ultra_liquidity", 0))
 
@@ -250,7 +248,7 @@ def process_pairs(
             "Vol 1h": float(p.get("volume", {}).get("hour_1", 0)),
             "Fee 1h": float(p.get("fees", {}).get("hour_1", 0)),
             "Ratio 1h": float(p.get("fee_tvl_ratio", {}).get("hour_1", 0)),
-            "Custom Sort": custom_sort,
+            "Custom Sort": None,  # placeholder to keep consistent structure if needed
             "Address": address,
         }
         item.update(vol_liq_dict)
@@ -298,7 +296,6 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         "MCAP": lambda x: f"{x:,.2f}",
         "Organic Score": lambda x: f"{x:.2f}",
         "LP Ratio": lambda x: f"{x:.0f}% / {100 - float(x):.0f}%" if isinstance(x, (float, int)) else x,
-        "Custom Sort": lambda x: f"{x:,.0f}" if x is not None else "",
     }
 
     # Format all vol/liq columns
@@ -343,7 +340,6 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
         "Vol 1h",
         "Fee 1h",
         "Ratio 1h",
-        "Custom Sort",
         # Only the correct vol/liq timeframes
         *[tf.replace("stats", "vol/liq ") for tf in ULTRA_TIMEFRAMES],
         "Address",
@@ -565,10 +561,6 @@ def main() -> None:
         "Vol 1h",
         "Fee 1h",
         "Ratio 1h",
-        "Liquidity ($)",
-        "LP Ratio",
-        "MCAP",
-        "Custom Sort",
         "vol/liq 5m",
         "vol/liq 1h",
         "vol/liq 6h",
