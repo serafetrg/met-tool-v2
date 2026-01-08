@@ -1,11 +1,11 @@
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import requests
 import streamlit as st
-from streamlit import st_autorefresh
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
@@ -395,11 +395,24 @@ def main() -> None:
     st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting and filters.")
     st.info("Fetching and processing data. This may take up to 20 seconds on first load...")
 
-    # Auto-refresh toggle (60s)
+    # Auto-refresh toggle (60s) without st_autorefresh, using time + rerun
     st.sidebar.markdown("**Auto Refresh**")
     auto_refresh_enabled = st.sidebar.checkbox("Auto-refresh every 60s", value=False, key="auto_refresh_toggle")
-    if auto_refresh_enabled:
-        st_autorefresh(interval=60_000, key="auto_refresh_counter")
+    interval_sec = 60
+
+    # Track last refresh time
+    if "last_refresh_ts" not in st.session_state:
+        st.session_state.last_refresh_ts = time.time()
+
+    now_ts = time.time()
+    if auto_refresh_enabled and now_ts - st.session_state.last_refresh_ts >= interval_sec:
+        st.session_state.last_refresh_ts = now_ts
+        st.experimental_rerun()
+
+    # Manual refresh button
+    if st.sidebar.button("Refresh now"):
+        st.session_state.last_refresh_ts = time.time()
+        st.experimental_rerun()
 
     data = fetch_data(API_URL)
     sol_price = fetch_sol_price()
