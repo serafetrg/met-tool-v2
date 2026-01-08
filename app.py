@@ -205,7 +205,6 @@ def process_pairs(
             tf_name = tf.replace("stats", "vol/liq ")
             vol_liq_dict[tf_name] = vol_liq
 
-        # Pro Score = average of vol/liq 5m and vol/liq 1h, times Ratio 30 min
         vol_liq_5m = vol_liq_dict.get("vol/liq 5m", 0.0)
         vol_liq_1h = vol_liq_dict.get("vol/liq 1h", 0.0)
         pro_score = ((vol_liq_5m + vol_liq_1h) / 2) * ratio_min30
@@ -361,6 +360,17 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             background-color: #7d3c98 !important;
             color: #fff !important;
         }
+        /* Sidebar spacing tighten */
+        [data-testid="stSidebar"] .block-container {
+            padding-top: 0.6rem;
+            padding-bottom: 0.6rem;
+        }
+        [data-testid="stSidebar"] [data-testid="stExpander"] {
+            padding: 0.25rem 0.4rem;
+        }
+        [data-testid="stSidebar"] [data-testid="stNumberInput"] {
+            margin-bottom: 0.35rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -434,7 +444,6 @@ def main() -> None:
             "min_ratio_min30": min_ratio_min30_default,
         }
 
-    # Clamp persisted values into current bounds to avoid ValueBelowMin errors
     def clamp(val, lo, hi):
         return max(lo, min(val, hi))
 
@@ -493,7 +502,7 @@ def main() -> None:
                 key="filter_input_min_ratio_min30",
             )
 
-            apply_filters = st.button("Update Data")
+            apply_filters = st.button("Update Data", use_container_width=True)
 
     if apply_filters or "filtered_pairs" not in st.session_state:
         st.session_state.filter_settings = {
