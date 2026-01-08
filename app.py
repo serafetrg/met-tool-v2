@@ -205,6 +205,11 @@ def process_pairs(
             tf_name = tf.replace("stats", "vol/liq ")
             vol_liq_dict[tf_name] = vol_liq
 
+        # Pro Score = average of vol/liq 5m and vol/liq 1h, times Ratio 30 min
+        vol_liq_5m = vol_liq_dict.get("vol/liq 5m", 0.0)
+        vol_liq_1h = vol_liq_dict.get("vol/liq 1h", 0.0)
+        pro_score = ((vol_liq_5m + vol_liq_1h) / 2) * ratio_min30
+
         item: Dict[str, Any] = {
             "Links": combined_links,
             "Name": p.get("name", "N/A"),
@@ -222,6 +227,7 @@ def process_pairs(
             "Fee 1h": float(p.get("fees", {}).get("hour_1", 0)),
             "Ratio 30 min": ratio_min30,
             "Ratio 1h": float(p.get("fee_tvl_ratio", {}).get("hour_1", 0)),
+            "Pro Score": pro_score,
         }
         item.update(vol_liq_dict)
         processed.append(item)
@@ -258,6 +264,7 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Vol 1h": lambda x: f"{x:,.2f}",
         "Fee 1h": lambda x: f"{x:,.2f}",
         "Ratio 1h": lambda x: f"{x:.2f}",
+        "Pro Score": lambda x: f"{x:,.5f}",
     }
 
     for tf in ULTRA_TIMEFRAMES:
@@ -303,11 +310,12 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
         "Max Fee %",
         "LP Ratio",
         "Organic Score",
+        "Pro Score",
     ]
 
     for col in columns:
         if col not in df.columns:
-            df[col] = "" if "vol/liq" not in col else 0.0
+            df[col] = "" if "vol/liq" not in col and col != "Pro Score" else 0.0
 
     df = df[[col for col in columns if col in df.columns]]
 
@@ -508,6 +516,7 @@ def main() -> None:
         "vol/liq 1h",
         "vol/liq 6h",
         "vol/liq 24h",
+        "Pro Score",
     ]
 
     st.markdown("#### Sort By")
