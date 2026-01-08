@@ -1,5 +1,4 @@
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -19,12 +18,6 @@ JUPITER_ULTRA_URL = "https://lite-api.jup.ag/ultra/v1/search?query="
 SOL_PRICE_URL = "https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112"
 
 ULTRA_TIMEFRAMES = ["stats5m", "stats1h", "stats6h", "stats24h"]
-
-
-def _rerun():
-    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
-    if rerun_fn:
-        rerun_fn()
 
 
 # ----------------------------
@@ -124,13 +117,17 @@ def parse_created_to_hours(created_str: str) -> int:
     try:
         if created_str == "N/A":
             return 0
+
         parts = created_str.split()
         if len(parts) >= 4 and "day" in parts[1]:
             days = int(parts[0])
             hours = int(parts[2])
             return days * 24 + hours
+
         if len(parts) >= 2 and "hour" in parts[1]:
-            return int(parts[0])
+            hours = int(parts[0])
+            return hours
+
         return 0
     except Exception:
         return 0
@@ -186,6 +183,7 @@ def process_pairs(
         usd_x = reserve_x * price_x
         usd_y = reserve_y * price_y
         total = usd_x + usd_y
+
         percent_x = (usd_x / total * 100) if total > 0 else 0
 
         created_str = format_created_at(extra.get("createdAt", ""))
@@ -207,6 +205,7 @@ def process_pairs(
             tf_name = tf.replace("stats", "vol/liq ")
             vol_liq_dict[tf_name] = vol_liq
 
+        # Pro Score = average of vol/liq 5m and vol/liq 1h, times Ratio 30 min
         vol_liq_5m = vol_liq_dict.get("vol/liq 5m", 0.0)
         vol_liq_1h = vol_liq_dict.get("vol/liq 1h", 0.0)
         pro_score = ((vol_liq_5m + vol_liq_1h) / 2) * ratio_min30
@@ -396,23 +395,6 @@ def main() -> None:
     st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting and filters.")
     st.info("Fetching and processing data. This may take up to 20 seconds on first load...")
 
-    # Auto-refresh toggle (60s) using rerun-compatible helper
-    st.sidebar.markdown("**Auto Refresh**")
-    auto_refresh_enabled = st.sidebar.checkbox("Auto-refresh every 60s", value=False, key="auto_refresh_toggle")
-    interval_sec = 60
-
-    if "last_refresh_ts" not in st.session_state:
-        st.session_state.last_refresh_ts = time.time()
-
-    now_ts = time.time()
-    if auto_refresh_enabled and now_ts - st.session_state.last_refresh_ts >= interval_sec:
-        st.session_state.last_refresh_ts = now_ts
-        _rerun()
-
-    if st.sidebar.button("Refresh now"):
-        st.session_state.last_refresh_ts = time.time()
-        _rerun()
-
     data = fetch_data(API_URL)
     sol_price = fetch_sol_price()
 
@@ -538,22 +520,13 @@ def main() -> None:
     ]
 
     st.markdown("#### Sort By")
-    sort_field_default = st.session_state.get("sort_field", "Vol 30 min")
-    if sort_field_default not in sort_options:
-        sort_field_default = "Vol 30 min"
-    sort_field_index = sort_options.index(sort_field_default)
     sort_field = st.radio(
         "Choose sort field:",
         sort_options,
-        index=sort_field_index,
+        index=0,
         horizontal=True,
-        key="sort_field",
     )
-    order_default = st.session_state.get("sort_order", "Descending")
-    order_index = 0 if order_default == "Descending" else 1
-    order = st.radio(
-        "Sort order:", options=["Descending", "Ascending"], index=order_index, horizontal=True, key="sort_order"
-    )
+    order = st.radio("Sort order:", options=["Descending", "Ascending"], index=0, horizontal=True)
     reverse = True if order == "Descending" else False
 
     display_table(filtered_pairs, sort_field, reverse)
