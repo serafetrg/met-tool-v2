@@ -594,7 +594,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-            "No pools match your filter settings. Try lowering the minimum MCAP, pool age, 30 min volume, or min ratio."
+        "No pools match your filter settings. Try lowering the minimum MCAP, pool age, 30 min volume, or min ratio."
         )
         return
 
