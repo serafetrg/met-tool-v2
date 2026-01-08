@@ -434,6 +434,19 @@ def main() -> None:
             "min_ratio_min30": min_ratio_min30_default,
         }
 
+    # Clamp persisted values into current bounds to avoid ValueBelowMin errors
+    def clamp(val, lo, hi):
+        return max(lo, min(val, hi))
+
+    st.session_state.filter_settings["min_age"] = clamp(st.session_state.filter_settings["min_age"], min_age, max_age)
+    st.session_state.filter_settings["min_mcap"] = clamp(st.session_state.filter_settings["min_mcap"], min_mcap, max_mcap)
+    st.session_state.filter_settings["min_vol_30"] = clamp(
+        st.session_state.filter_settings["min_vol_30"], min_vol_30, max_vol_30
+    )
+    st.session_state.filter_settings["min_ratio_min30"] = clamp(
+        st.session_state.filter_settings["min_ratio_min30"], min_ratio_min30, max_ratio_min30
+    )
+
     with st.sidebar:
         with st.expander("🔍 Filter Pools", expanded=True):
             st.markdown("**Minimum Pool Age (hours)**")
