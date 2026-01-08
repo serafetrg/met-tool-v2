@@ -152,9 +152,8 @@ def process_pairs(
         if extra.get("organicScore", 0) < 74.9:
             continue
 
-        address = p.get("address", "N/A")
         meteora_link = (
-            f"<a href='https://app.meteora.ag/dlmm/{address}' target='_blank' style='white-space:nowrap;'>meteora</a>"
+            f"<a href='https://app.meteora.ag/dlmm/{p.get('address', '')}' target='_blank' style='white-space:nowrap;'>meteora</a>"
         )
         dexscreener_link = (
             f"<a href='https://dexscreener.com/solana/{mint_x}' target='_blank' style='white-space:nowrap;'>dex</a>"
@@ -207,8 +206,6 @@ def process_pairs(
             vol_liq_dict[tf_name] = vol_liq
 
         item: Dict[str, Any] = {
-            "Address_full": address,  # keep full for CSV/copy
-            "Address": address,       # will render truncated in HTML
             "Links": combined_links,
             "Name": p.get("name", "N/A"),
             "MCAP": mcap,
@@ -244,17 +241,6 @@ def get_safe_default(min_val: float, max_val: float, values_list: List[float]) -
     return max_val
 
 
-def safe_session_number(key: str, min_val: float, max_val: float, default: float) -> float:
-    if key not in st.session_state or not isinstance(st.session_state[key], (int, float)):
-        st.session_state[key] = default
-    else:
-        if st.session_state[key] < min_val:
-            st.session_state[key] = min_val
-        elif st.session_state[key] > max_val:
-            st.session_state[key] = max_val
-    return st.session_state[key]
-
-
 # ----------------------------
 # Table formatting + rendering
 # ----------------------------
@@ -286,15 +272,15 @@ def format_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
-    df_raw = pd.DataFrame(pairs)
-    df = df_raw.copy()
+    df = pd.DataFrame(pairs)
     df = format_columns(df)
 
-    # spacer columns for visual separation (wider)
-    spacer1, spacer2, spacer3 = " ", "  ", "   "
+    # wider spacer columns for visual separation
+    spacer1 = "          "
+    spacer2 = "               "
+    spacer3 = "                    "
 
     columns = [
-        "Address",
         "Links",
         "Name",
         "MCAP",
@@ -325,12 +311,6 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             df[col] = "" if "vol/liq" not in col else 0.0
 
     df = df[[col for col in columns if col in df.columns]]
-
-    # Prepare address truncated display with full copy on double-click
-    if "Address" in df.columns and "Address_full" in df_raw.columns:
-        df["Address"] = df_raw["Address_full"].apply(
-            lambda full: f"<span class='addr-copy' data-full='{full}'>{full[:4]}…</span>"
-        )
 
     try:
         sort_vals = df[sort_field].replace({",": "", "%": ""}, regex=True).astype(float)
@@ -370,48 +350,18 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             word-break: break-all !important;
             overflow-wrap: anywhere !important;
         }
-        td[data-label="Address"] {
-            max-width: 120px !important;
-        }
-        /* Wider spacers */
-        td[data-label=" "],
-        th[data-label=" "] { min-width: 28px !important; }
-        td[data-label="  "],
-        th[data-label="  "] { min-width: 36px !important; }
-        td[data-label="   "],
-        th[data-label="   "] { min-width: 44px !important; }
-
         .high-ratio-row {
             background-color: #7d3c98 !important;
             color: #fff !important;
         }
-        /* Address copy cursor */
-        .addr-copy { cursor: copy; }
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # JS to copy full address on double-click
-    st.markdown(
-        """
-        <script>
-        document.addEventListener('DOMContentLoaded', () => {
-          document.querySelectorAll('.addr-copy').forEach(el => {
-            el.addEventListener('dblclick', () => {
-              const full = el.getAttribute('data-full') || '';
-              navigator.clipboard.writeText(full).catch(() => {});
-            });
-          });
-        });
-        </script>
         """,
         unsafe_allow_html=True,
     )
 
     def row_style(row: pd.Series) -> List[str]:
         try:
-            if float(str(row["Ratio 30 min"]).replace(",", "")) > 10:
+            if float(row["Ratio 30 min"]) > 10:
                 return ["background-color: #7d3c98; color: #fff;"] * len(row)
         except Exception:
             pass
@@ -422,12 +372,9 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     st.write("### Meteora Pools Table")
     st.markdown(styled_df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-    # CSV with full addresses
-    csv_df = df_raw.copy()
-    csv_df = csv_df.drop(columns=["Address_full"], errors="ignore").rename(columns={"Address_full": "Address"})
     st.download_button(
         label="Download table as CSV",
-        data=csv_df.to_csv(index=False),
+        data=df.to_csv(index=False),
         file_name="meteora_pools.csv",
         mime="text/csv",
     )
@@ -480,7 +427,7 @@ def main() -> None:
             "min_ratio_min30": min_ratio_min30_default,
         }
 
-    apply_filters = False
+    # Use filter_settings values directly; don't pre-set widget keys to avoid Streamlit warning
     with st.sidebar:
         with st.expander("🔍 Filter Pools", expanded=True):
             st.markdown("**Minimum Pool Age (hours)**")
@@ -489,7 +436,7 @@ def main() -> None:
                 label="",
                 min_value=min_age,
                 max_value=max_age,
-                value=safe_session_number("filter_input_min_age", min_age, max_age, min_age_default),
+                value=st.session_state.filter_settings["min_age"],
                 step=1,
                 key="filter_input_min_age",
             )
@@ -500,9 +447,7 @@ def main() -> None:
                 label="",
                 min_value=min_mcap,
                 max_value=max_mcap,
-                value=safe_session_number(
-                    "filter_input_min_mcap", min_mcap, max_mcap, min_mcap_default
-                ),
+                value=st.session_state.filter_settings["min_mcap"],
                 step=1000,
                 key="filter_input_min_mcap",
             )
@@ -513,9 +458,7 @@ def main() -> None:
                 label="",
                 min_value=min_vol_30,
                 max_value=max_vol_30,
-                value=safe_session_number(
-                    "filter_input_min_vol_30", min_vol_30, max_vol_30, min_vol_30_default
-                ),
+                value=st.session_state.filter_settings["min_vol_30"],
                 step=1.0,
                 key="filter_input_min_vol_30",
             )
@@ -526,12 +469,7 @@ def main() -> None:
                 label="",
                 min_value=min_ratio_min30,
                 max_value=max_ratio_min30,
-                value=safe_session_number(
-                    "filter_input_min_ratio_min30",
-                    min_ratio_min30,
-                    max_ratio_min30,
-                    min_ratio_min30_default,
-                ),
+                value=st.session_state.filter_settings["min_ratio_min30"],
                 step=0.01,
                 key="filter_input_min_ratio_min30",
             )
