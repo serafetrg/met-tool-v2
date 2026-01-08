@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import requests
 import streamlit as st
+from streamlit import st_autorefresh
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(message)s')
 
@@ -205,7 +206,6 @@ def process_pairs(
             tf_name = tf.replace("stats", "vol/liq ")
             vol_liq_dict[tf_name] = vol_liq
 
-        # Pro Score = average of vol/liq 5m and vol/liq 1h, times Ratio 30 min
         vol_liq_5m = vol_liq_dict.get("vol/liq 5m", 0.0)
         vol_liq_1h = vol_liq_dict.get("vol/liq 1h", 0.0)
         pro_score = ((vol_liq_5m + vol_liq_1h) / 2) * ratio_min30
@@ -395,6 +395,12 @@ def main() -> None:
     st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting and filters.")
     st.info("Fetching and processing data. This may take up to 20 seconds on first load...")
 
+    # Auto-refresh toggle (60s)
+    st.sidebar.markdown("**Auto Refresh**")
+    auto_refresh_enabled = st.sidebar.checkbox("Auto-refresh every 60s", value=False, key="auto_refresh_toggle")
+    if auto_refresh_enabled:
+        st_autorefresh(interval=60_000, key="auto_refresh_counter")
+
     data = fetch_data(API_URL)
     sol_price = fetch_sol_price()
 
@@ -523,10 +529,15 @@ def main() -> None:
     sort_field = st.radio(
         "Choose sort field:",
         sort_options,
-        index=0,
+        index=sort_options.index(st.session_state.get("sort_field", "Vol 30 min"))
+        if "sort_field" in st.session_state
+        else 0,
         horizontal=True,
+        key="sort_field",
     )
-    order = st.radio("Sort order:", options=["Descending", "Ascending"], index=0, horizontal=True)
+    order = st.radio(
+        "Sort order:", options=["Descending", "Ascending"], index=0, horizontal=True, key="sort_order"
+    )
     reverse = True if order == "Descending" else False
 
     display_table(filtered_pairs, sort_field, reverse)
