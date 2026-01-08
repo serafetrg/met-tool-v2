@@ -275,6 +275,11 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
     df = pd.DataFrame(pairs)
     df = format_columns(df)
 
+    # Wider spacers
+    spacer1 = "          "
+    spacer2 = "               "
+    spacer3 = "                    "
+
     columns = [
         "Links",
         "Name",
@@ -283,16 +288,19 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
         "Token Created",
         "Bin Step",
         "Base Fee %",
+        spacer1,
         "vol/liq 5m",
         "vol/liq 1h",
         "vol/liq 6h",
         "vol/liq 24h",
+        spacer2,
         "Vol 30 min",
         "Vol 1h",
         "Fee 30 min",
         "Fee 1h",
         "Ratio 30 min",
         "Ratio 1h",
+        spacer3,
         "Max Fee %",
         "LP Ratio",
         "Organic Score",
