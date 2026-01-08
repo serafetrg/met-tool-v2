@@ -21,6 +21,12 @@ SOL_PRICE_URL = "https://lite-api.jup.ag/price/v3?ids=So111111111111111111111111
 ULTRA_TIMEFRAMES = ["stats5m", "stats1h", "stats6h", "stats24h"]
 
 
+def _rerun():
+    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if rerun_fn:
+        rerun_fn()
+
+
 # ----------------------------
 # Fetching
 # ----------------------------
@@ -118,17 +124,13 @@ def parse_created_to_hours(created_str: str) -> int:
     try:
         if created_str == "N/A":
             return 0
-
         parts = created_str.split()
         if len(parts) >= 4 and "day" in parts[1]:
             days = int(parts[0])
             hours = int(parts[2])
             return days * 24 + hours
-
         if len(parts) >= 2 and "hour" in parts[1]:
-            hours = int(parts[0])
-            return hours
-
+            return int(parts[0])
         return 0
     except Exception:
         return 0
@@ -184,7 +186,6 @@ def process_pairs(
         usd_x = reserve_x * price_x
         usd_y = reserve_y * price_y
         total = usd_x + usd_y
-
         percent_x = (usd_x / total * 100) if total > 0 else 0
 
         created_str = format_created_at(extra.get("createdAt", ""))
@@ -395,24 +396,22 @@ def main() -> None:
     st.write("This dashboard fetches and scores pools from Meteora, with interactive sorting and filters.")
     st.info("Fetching and processing data. This may take up to 20 seconds on first load...")
 
-    # Auto-refresh toggle (60s) without st_autorefresh, using time + rerun
+    # Auto-refresh toggle (60s) using rerun-compatible helper
     st.sidebar.markdown("**Auto Refresh**")
     auto_refresh_enabled = st.sidebar.checkbox("Auto-refresh every 60s", value=False, key="auto_refresh_toggle")
     interval_sec = 60
 
-    # Track last refresh time
     if "last_refresh_ts" not in st.session_state:
         st.session_state.last_refresh_ts = time.time()
 
     now_ts = time.time()
     if auto_refresh_enabled and now_ts - st.session_state.last_refresh_ts >= interval_sec:
         st.session_state.last_refresh_ts = now_ts
-        st.experimental_rerun()
+        _rerun()
 
-    # Manual refresh button
     if st.sidebar.button("Refresh now"):
         st.session_state.last_refresh_ts = time.time()
-        st.experimental_rerun()
+        _rerun()
 
     data = fetch_data(API_URL)
     sol_price = fetch_sol_price()
@@ -539,17 +538,21 @@ def main() -> None:
     ]
 
     st.markdown("#### Sort By")
+    sort_field_default = st.session_state.get("sort_field", "Vol 30 min")
+    if sort_field_default not in sort_options:
+        sort_field_default = "Vol 30 min"
+    sort_field_index = sort_options.index(sort_field_default)
     sort_field = st.radio(
         "Choose sort field:",
         sort_options,
-        index=sort_options.index(st.session_state.get("sort_field", "Vol 30 min"))
-        if "sort_field" in st.session_state
-        else 0,
+        index=sort_field_index,
         horizontal=True,
         key="sort_field",
     )
+    order_default = st.session_state.get("sort_order", "Descending")
+    order_index = 0 if order_default == "Descending" else 1
     order = st.radio(
-        "Sort order:", options=["Descending", "Ascending"], index=0, horizontal=True, key="sort_order"
+        "Sort order:", options=["Descending", "Ascending"], index=order_index, horizontal=True, key="sort_order"
     )
     reverse = True if order == "Descending" else False
 
