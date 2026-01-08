@@ -594,35 +594,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-         "No pools match your filter settings. Try lowering the minimum MCAP, pool age, 30 min volume, or min ratio."
-        return
-
-    sort_options = [
-        "Vol 30 min",
-        "Fee 30 min",
-        "Ratio 30 min",
-        "Vol 1h",
-        "Fee 1h",
-        "Ratio 1h",
-        "vol/liq 5m",
-        "vol/liq 1h",
-        "vol/liq 6h",
-        "vol/liq 24h",
-        "Pro Score",
-    ]
-
-    st.markdown("#### Sort By")
-    sort_field = st.radio(
-        "Choose sort field:",
-        sort_options,
-        index=0,
-        horizontal=True,
-    )
-    order = st.radio("Sort order:", options=["Descending", "Ascending"], index=0, horizontal=True)
-    reverse = True if order == "Descending" else False
-
-    display_table(filtered_pairs, sort_field, reverse)
-
-
-if __name__ == "__main__":
-    main()
