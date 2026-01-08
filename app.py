@@ -360,16 +360,33 @@ def display_table(pairs: List[dict], sort_field: str, reverse: bool) -> None:
             background-color: #7d3c98 !important;
             color: #fff !important;
         }
-        /* Sidebar spacing tighten */
+
+        /* Sidebar spacing tighten: reduce gaps between label, caption, and input */
         [data-testid="stSidebar"] .block-container {
-            padding-top: 0.6rem;
+            padding-top: 0.4rem;
             padding-bottom: 0.6rem;
         }
         [data-testid="stSidebar"] [data-testid="stExpander"] {
-            padding: 0.25rem 0.4rem;
+            padding: 0.15rem 0.35rem;
         }
-        [data-testid="stSidebar"] [data-testid="stNumberInput"] {
+        /* Group spacing: reduce margin between caption and input, add small gap after input */
+        [data-testid="stSidebar"] [data-testid="stNumberInput"] > label {
+            margin-bottom: 0.15rem;
+        }
+        [data-testid="stSidebar"] [data-testid="stNumberInput"] > div:nth-child(2) {
+            margin-top: 0.15rem;
             margin-bottom: 0.35rem;
+        }
+        /* Button invert: bright background, dark text */
+        [data-testid="stSidebar"] button[kind="primary"] {
+            background-color: #f0f2f6 !important;
+            color: #1e1e1e !important;
+            border: 1px solid #444 !important;
+        }
+        [data-testid="stSidebar"] button[kind="primary"]:hover {
+            background-color: #ffffff !important;
+            color: #000 !important;
+            border: 1px solid #666 !important;
         }
         </style>
         """,
